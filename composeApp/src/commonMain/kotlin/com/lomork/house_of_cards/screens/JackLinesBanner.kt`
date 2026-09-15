@@ -1,0 +1,157 @@
+package com.lomork.house_of_cards.screens
+
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
+import com.lomork.house_of_cards.theme.Hoc
+import kotlinx.coroutines.delay
+import kotlin.random.Random
+
+@Composable
+fun JackLinesBanner(gameTitle: String) {
+    var cycle by remember { mutableStateOf(0) }
+    val blocked = remember(cycle) { Random.nextBoolean() }
+    val chipPos = remember(cycle) { 0.30f + Random.nextFloat() * 0.40f }
+    val target = if (blocked) chipPos else 1f
+
+    val progress = remember { Animatable(0f) }
+    var glow by remember { mutableStateOf(false) }
+    var shake by remember { mutableStateOf(0f) }
+    var confettiActive by remember { mutableStateOf(false) }
+    
+    val confettiParticles = remember { List(20) { Particle() } }
+    val confettiProgress = remember { Animatable(0f) }
+
+    val goldColor = Hoc.Gold
+    val successColor = Hoc.Success
+    val dangerColor = Hoc.Danger
+
+    LaunchedEffect(cycle) {
+        glow = false
+        confettiActive = false
+        confettiProgress.snapTo(0f)
+        progress.snapTo(0f)
+        
+        progress.animateTo(target, tween(1200, easing = LinearEasing))
+        
+        if (blocked) {
+            shake = 5f
+            delay(100)
+            shake = 0f
+            delay(600)
+        } else {
+            glow = true
+            confettiActive = true
+            shake = 3f
+            delay(50)
+            shake = 0f
+            
+            confettiProgress.animateTo(1f, tween(800, easing = FastOutSlowInEasing))
+            delay(800)
+            glow = false
+        }
+        
+        delay(400)
+        progress.animateTo(0f, tween(600, easing = LinearEasing))
+        cycle++
+    }
+
+    val glowAlpha by animateFloatAsState(if (glow) 1f else 0f, tween(300))
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer { translationX = shake }, 
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(0.72f)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(successColor.copy(alpha = 0.32f * glowAlpha)),
+            ) {
+                Text(
+                    gameTitle, 
+                    style = MaterialTheme.typography.headlineLarge, 
+                    color = goldColor,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+
+            Canvas(Modifier.fillMaxWidth().height(60.dp)) {
+                val cy = size.height / 2f
+                val chipX = size.width * chipPos
+                val lineEnd = size.width * progress.value
+                
+                drawLine(
+                    brush = Brush.horizontalGradient(
+                        listOf(Color.Transparent, goldColor.copy(alpha = 0.4f), goldColor, goldColor, Color.Transparent),
+                        start = Offset(0f, cy),
+                        end = Offset(lineEnd, cy)
+                    ),
+                    start = Offset(0f, cy),
+                    end = Offset(lineEnd, cy),
+                    strokeWidth = 8.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                
+                drawLine(
+                    color = Color.White,
+                    start = Offset(0f, cy),
+                    end = Offset(lineEnd, cy),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+
+                val passed = progress.value >= chipPos
+                val chipColor = if (passed && !blocked) successColor else dangerColor
+                
+                drawCircle(color = chipColor, radius = 8.dp.toPx(), center = Offset(chipX, cy))
+                drawCircle(color = Color.White.copy(alpha = 0.7f), radius = 3.dp.toPx(), center = Offset(chipX, cy))
+
+                if (confettiActive) {
+                    confettiParticles.forEach { p ->
+                        val x = chipX + (p.vx * confettiProgress.value * size.width * 0.2f)
+                        val y = cy + (p.vy * confettiProgress.value * size.height * 0.5f)
+                        val alpha = 1f - confettiProgress.value
+                        drawCircle(
+                            color = p.color.copy(alpha = alpha),
+                            radius = 2.dp.toPx(),
+                            center = Offset(x, y)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private class Particle {
+    val vx = Random.nextFloat() * 2f - 1f
+    val vy = Random.nextFloat() * 2f - 1f
+    val color = listOf(Color.Yellow, Color.Cyan, Color.Magenta, Color.White).random()
+}

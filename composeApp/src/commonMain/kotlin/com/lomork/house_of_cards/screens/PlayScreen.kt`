@@ -1,0 +1,592 @@
+package com.lomork.house_of_cards.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.lomork.house_of_cards.PlatformBackHandler
+import com.lomork.house_of_cards.data.AchievementDef
+import com.lomork.house_of_cards.data.AppStore
+import com.lomork.house_of_cards.data.FriendEntry
+import com.lomork.house_of_cards.data.MatchRecord
+import com.lomork.house_of_cards.data.SeedData
+import com.lomork.house_of_cards.data.StoreItemDef
+import com.lomork.house_of_cards.data.nowMillis
+import com.lomork.house_of_cards.games.GameDef
+import com.lomork.house_of_cards.games.GameMode
+import com.lomork.house_of_cards.games.sequence.BOARD_SIZE
+import com.lomork.house_of_cards.games.sequence.BoardCard
+import com.lomork.house_of_cards.games.sequence.Card
+import com.lomork.house_of_cards.games.sequence.Cell
+import com.lomork.house_of_cards.games.sequence.JokerType
+import com.lomork.house_of_cards.games.sequence.Move
+import com.lomork.house_of_cards.games.sequence.Player
+import com.lomork.house_of_cards.games.sequence.SequenceAi
+import com.lomork.house_of_cards.games.sequence.SequenceGame
+import com.lomork.house_of_cards.games.sequence.WIN_SEQUENCES
+import com.lomork.house_of_cards.nav.GameOpponent
+import com.lomork.house_of_cards.nav.Navigator
+import com.lomork.house_of_cards.theme.Hoc
+import com.lomork.house_of_cards.ui.HocButton
+import com.lomork.house_of_cards.ui.PokerChip
+import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.random.Random
+
+private const val TURN_SECONDS = 60
+
+private enum class Phase { SEARCHING, PLAYING, FINISHED }
+
+private val ONLINE_NAMES = listOf(
+    "Avery", "Riley", "Jordan", "Casey", "Morgan", "Quinn", "Rowan", "Sage", "Emery",
+    "Skyler", "Reese", "Dakota", "Harper", "Parker", "Ellis", "Marlow", "Sasha", "Devon",
+    "Kai", "Nico", "Jules", "Remi", "Wren", "Teo", "Luca", "Finn", "Indie", "Zara",
+)
+
+private data class ChipSetup(
+    val player: StoreItemDef,
+    val opponent: StoreItemDef,
+    val collision: Boolean,
+    val loserName: String?,
+)
+
+private fun resolveChips(
+    playerChipId: String?,
+    oppChipId: String?,
+    playerLevel: Int,
+    oppLevel: Int,
+    playerName: String,
+    oppName: String,
+): ChipSetup {
+    val p = SeedData.chipById(playerChipId)
+    val o = SeedData.chipById(oppChipId)
+    val collide = p.id == o.id && p.id != "chip_default"
+    if (!collide) return ChipSetup(p, o, false, null)
+    return if (playerLevel <= oppLevel) {
+        ChipSetup(SeedData.defaultChip, o, true, playerName)
+    } else {
+        ChipSetup(p, SeedData.defaultChip, true, oppName)
+    }
+}
+
+@Composable
+fun PlayScreen(store: AppStore, nav: Navigator, gameDef: GameDef, mode: GameMode, opponent: GameOpponent?) {
+    val human = Player.ONE
+    val botPlayer = Player.TWO
+    val playerName = store.profile.username
+    val playerLevel = store.profile.level
+
+    var phase by remember { mutableStateOf(if (mode == GameMode.ONLINE && opponent == null) Phase.SEARCHING else Phase.PLAYING) }
+    var resolvedOpp by remember { mutableStateOf(opponent) }
+    var gameKey by remember { mutableStateOf(0) }
+    var tick by remember { mutableStateOf(0) }
+    var finished by remember { mutableStateOf(false) }
+    var winner by remember { mutableStateOf<Player?>(null) }
+    var selectedCard by remember { mutableStateOf<Card?>(null) }
+    var timeLeft by remember { mutableStateOf(TURN_SECONDS) }
+    var showCollision by remember { mutableStateOf(false) }
+    var resultText by remember { mutableStateOf("") }
+    var autoPlayedNote by remember { mutableStateOf<String?>(null) }
+    var unlockedBadges by remember { mutableStateOf<List<AchievementDef>>(emptyList()) }
+    var friendAdded by remember { mutableStateOf(false) }
+    var showQuit by remember { mutableStateOf(false) }
+
+    val oppLevel = remember(resolvedOpp, gameKey) {
+        val f = resolvedOpp?.userId?.let { store.friendById(it) }
+        f?.level ?: (playerLevel + Random.nextInt(-2, 3)).coerceAtLeast(1)
+    }
+    val oppName = resolvedOpp?.name ?: "Opponent"
+
+    val engine = remember(gameKey) { SequenceGame() }
+    val bot = remember { SequenceAi() }
+    val startMillis = remember(gameKey) { nowMillis() }
+
+    val chipSetup = remember(gameKey, resolvedOpp, oppLevel) {
+        resolveChips(
+            playerChipId = store.profile.equippedChipId,
+            oppChipId = resolvedOpp?.chipId,
+            playerLevel = playerLevel,
+            oppLevel = oppLevel,
+            playerName = playerName,
+            oppName = oppName,
+        )
+    }
+
+    fun finish(w: Player) {
+        if (finished) return
+        finished = true
+        winner = w
+        phase = Phase.FINISHED
+        val isWin = w == human
+        resultText = if (isWin) "Victory!" else "Defeat"
+        val dur = ((nowMillis() - startMillis) / 1000L).toInt()
+        val snap = engine.snapshot(playerName, oppName, w.id)
+        val rec = MatchRecord(
+            id = "m_${nowMillis()}",
+            gameId = gameDef.id,
+            opponentName = oppName,
+            opponentChipId = resolvedOpp?.chipId,
+            result = if (isWin) "WIN" else "LOSS",
+            durationSeconds = dur,
+            moveCount = engine.moveCount,
+            timestamp = nowMillis(),
+            snapshot = snap,
+        )
+        store.addMatch(rec)
+        if (isWin) store.recordWin() else store.recordLoss()
+        unlockedBadges = store.applyAchievements()
+    }
+
+    fun submit(move: Move): Boolean {
+        if (finished || engine.current != human) return false
+        if (engine.applyMove(human, move)) {
+            selectedCard = null
+            autoPlayedNote = null
+            tick++
+            val w = engine.winner()
+            if (w != null) finish(w)
+            return true
+        }
+        return false
+    }
+
+    fun rematch() {
+        gameKey++
+        tick = 0
+        finished = false
+        winner = null
+        phase = Phase.PLAYING
+        selectedCard = null
+        resultText = ""
+        autoPlayedNote = null
+        unlockedBadges = emptyList()
+        friendAdded = false
+        showCollision = false
+    }
+
+    fun attemptBack() {
+        if (phase == Phase.PLAYING && !finished) {
+            showQuit = true
+        } else {
+            nav.pop()
+        }
+    }
+
+    PlatformBackHandler(enabled = phase == Phase.PLAYING && !finished) { showQuit = true }
+
+    LaunchedEffect(Unit) {
+        if (mode == GameMode.ONLINE && resolvedOpp == null) {
+            delay(Random.nextLong(1400, 3000))
+            val customChips = SeedData.storeItems.filter { it.type == "chip" && it.id != "chip_default" }
+            resolvedOpp = GameOpponent(
+                name = ONLINE_NAMES.random(),
+                chipId = if (customChips.isEmpty()) null else customChips.random().id,
+                isOnline = true,
+            )
+            phase = Phase.PLAYING
+        }
+    }
+
+    LaunchedEffect(gameKey, chipSetup) {
+        if (chipSetup.collision) {
+            showCollision = true
+            delay(20000)
+            showCollision = false
+        }
+    }
+
+    LaunchedEffect(tick, finished, gameKey) {
+        if (finished) return@LaunchedEffect
+        val w = engine.winner()
+        if (w != null) { finish(w); return@LaunchedEffect }
+        if (engine.current == botPlayer) {
+            delay(Random.nextLong(700, 2200))
+            if (!finished && engine.current == botPlayer) {
+                engine.applyMove(botPlayer, bot.chooseMove(engine, botPlayer))
+                tick++
+                val w2 = engine.winner()
+                if (w2 != null) finish(w2)
+            }
+        }
+    }
+
+    LaunchedEffect(tick, finished, gameKey) {
+        if (finished || engine.current != human) return@LaunchedEffect
+        timeLeft = TURN_SECONDS
+        var t = TURN_SECONDS
+        while (t > 0 && !finished && engine.current == human) {
+            delay(1000)
+            t--
+            timeLeft = t
+        }
+        if (!finished && engine.current == human) {
+            autoPlayedNote = "Time's up — a random move was played for you."
+            engine.applyMove(human, bot.worstMove(engine, human))
+            tick++
+            val w = engine.winner()
+            if (w != null) finish(w)
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Hoc.Background)) {
+        if (phase == Phase.SEARCHING) {
+            Column(
+                Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                CircularProgressIndicator(color = Hoc.Gold)
+                Spacer(Modifier.height(16.dp))
+                Text("Finding an opponent…", style = MaterialTheme.typography.titleMedium, color = Hoc.TextPrimary)
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("\u2190", Modifier.clickable { attemptBack() }.padding(8.dp), fontSize = 20.sp, color = Hoc.Gold)
+                    Column(Modifier.weight(1f)) {
+                        Text(gameDef.title, style = MaterialTheme.typography.titleMedium, color = Hoc.TextPrimary)
+                        Text("vs $oppName", style = MaterialTheme.typography.bodySmall, color = Hoc.TextSecondary)
+                    }
+                    PokerChip(chipSetup.opponent, size = 30.dp)
+                    Spacer(Modifier.width(6.dp))
+                    PokerChip(chipSetup.player, size = 30.dp)
+                }
+
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (engine.current == human) "Your turn" else "$oppName is thinking…",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (engine.current == human) Hoc.Gold else Hoc.TextSecondary,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "You ${engine.sequencesFor(human)}/$WIN_SEQUENCES · $oppName ${engine.sequencesFor(botPlayer)}/$WIN_SEQUENCES",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Hoc.TextSecondary,
+                    )
+                    if (engine.current == human) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "\u23F1 $timeLeft",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (timeLeft <= 10) Hoc.Danger else Hoc.Gold,
+                        )
+                    }
+                }
+
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    key(tick) { Board(engine, chipSetup, selectedCard, human, botPlayer, Modifier.fillMaxSize()) { submit(it) } }
+                }
+
+                if (autoPlayedNote != null) {
+                    Text(autoPlayedNote!!, style = MaterialTheme.typography.bodySmall, color = Hoc.Danger)
+                }
+
+                key(tick) { FanHand(engine.handOf(human), selectedCard) { selectedCard = it } }
+            }
+        }
+
+        if (showCollision) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter),
+                shape = RoundedCornerShape(12.dp),
+                color = Hoc.SurfaceHigh,
+                border = androidx.compose.foundation.BorderStroke(1.dp, Hoc.Gold),
+            ) {
+                Text(
+                    "Both players share the same chip. ${chipSetup.loserName ?: "A player"} will use the classic chip for this game.",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Hoc.TextPrimary,
+                )
+            }
+        }
+
+        if (showQuit) {
+            AlertDialog(
+                onDismissRequest = { showQuit = false },
+                title = { Text("Quit match?") },
+                text = { Text("Do you really want to quit an ongoing match?\n\npenalty −50 coins") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        store.forfeitPenalty()
+                        showQuit = false
+                        nav.pop()
+                    }) { Text("Quit", color = Hoc.Danger) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showQuit = false }) { Text("Keep playing", color = Hoc.Gold) }
+                },
+            )
+        }
+
+        if (phase == Phase.FINISHED) {
+            Box(Modifier.fillMaxSize().background(Hoc.Background.copy(alpha = 0.92f)), contentAlignment = Alignment.Center) {
+                Column(
+                    Modifier.padding(24.dp).clip(RoundedCornerShape(20.dp)).background(Hoc.SurfaceHigh)
+                        .border(1.dp, Hoc.Gold, RoundedCornerShape(20.dp)).padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(resultText, style = MaterialTheme.typography.headlineMedium, color = if (winner == human) Hoc.Gold else Hoc.Danger)
+                    Text("Against $oppName", style = MaterialTheme.typography.bodyMedium, color = Hoc.TextSecondary)
+                    Text(
+                        "Sequences — You ${engine.sequencesFor(human)} · $oppName ${engine.sequencesFor(botPlayer)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Hoc.TextMuted,
+                    )
+                    if (unlockedBadges.isNotEmpty()) {
+                        Text(
+                            "Achievement${if (unlockedBadges.size > 1) "s" else ""} unlocked: ${unlockedBadges.joinToString(", ") { it.icon + " " + it.title }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Hoc.Success,
+                        )
+                    }
+                    HocButton("Rematch") { rematch() }
+                    if (mode == GameMode.ONLINE) {
+                        val already = store.friendByUsername(oppName) != null || friendAdded
+                        HocButton(if (already) "Friend added" else "Add as friend", secondary = true, enabled = !already) {
+                            store.addFriend(
+                                FriendEntry(
+                                    userId = "u_${nowMillis()}",
+                                    username = oppName,
+                                    level = oppLevel,
+                                    chipId = resolvedOpp?.chipId,
+                                    isOnline = true,
+                                ),
+                            )
+                            friendAdded = true
+                        }
+                    }
+                    HocButton("Back to menu", secondary = true) { nav.pop() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Board(
+    engine: SequenceGame,
+    chips: ChipSetup,
+    selected: Card?,
+    human: Player,
+    bot: Player,
+    modifier: Modifier = Modifier,
+    onCellTap: (Move) -> Unit,
+) {
+    val felt = Hoc.Felt
+    val surfaceCell = Hoc.Surface
+    val divider = Hoc.Divider
+    val goldSoft = Hoc.GoldSoft
+    val muted = Hoc.TextMuted
+    val gold = Hoc.Gold
+
+    val highlighted = remember(selected, engine.occupancy, engine.locked) {
+        selected?.let { highlightCells(engine, it, bot) } ?: emptySet()
+    }
+
+    BoxWithConstraints(modifier) {
+        val cellW = (maxWidth - 8.dp) / BOARD_SIZE
+        val cellH = (maxHeight - 8.dp) / BOARD_SIZE
+        val chipSize = minOf(cellW, cellH) * 0.66f
+
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(felt.copy(alpha = 0.14f))
+                .border(1.dp, divider, RoundedCornerShape(10.dp))
+                .padding(2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            for (row in 0 until BOARD_SIZE) {
+                Row {
+                    for (col in 0 until BOARD_SIZE) {
+                        val cell = Cell(row, col)
+                        val owner = engine.ownerAt(cell)
+                        val locked = engine.isLocked(cell)
+                        val corner = engine.isCorner(cell)
+                        val tappable = engine.current == human && selected != null && cell in highlighted
+
+                        val cellBg = if (corner) felt.copy(alpha = 0.30f) else surfaceCell.copy(alpha = 0.55f)
+
+                        Box(
+                            modifier = Modifier
+                                .size(cellW, cellH)
+                                .padding(0.5.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(cellBg)
+                                .then(
+                                    if (tappable) {
+                                        Modifier.clickable {
+                                            val m = selected?.let { moveFor(it, cell) }
+                                            if (m != null) onCellTap(m)
+                                        }
+                                    } else Modifier,
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            when {
+                                corner -> Text("\u2726", fontSize = 14.sp, color = goldSoft)
+                                owner != null -> {
+                                    val chip = if (owner == human) chips.player else chips.opponent
+                                    ChipMarker(chip, locked, chipSize)
+                                }
+                                tappable -> GhostChip(chipSize)
+                                else -> engine.boardCardAt(cell)?.let {
+                                    Text(it.rank.label + it.suit.symbol, fontSize = 12.sp, color = muted)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChipMarker(item: StoreItemDef, locked: Boolean, size: Dp) {
+    Box(contentAlignment = Alignment.Center) {
+        if (locked) {
+            Box(
+                Modifier
+                    .size(size * 1.3f)
+                    .clip(CircleShape)
+                    .background(Hoc.LockedGlow.copy(alpha = 0.28f)),
+            )
+        }
+        PokerChip(item, size = size, ring = true)
+    }
+}
+
+@Composable
+private fun GhostChip(size: Dp) {
+    Box(
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Hoc.Gold.copy(alpha = 0.08f))
+            .border(1.5.dp, Hoc.Gold.copy(alpha = 0.75f), CircleShape),
+    )
+}
+
+@Composable
+private fun FanHand(cards: List<Card>, selected: Card?, onSelect: (Card) -> Unit) {
+    val cardW = 54.dp
+    val cardH = 78.dp
+    val mid = (cards.size - 1) / 2f
+    val surfaceHigh = Hoc.SurfaceHigh
+    val divider = Hoc.Divider
+    val gold = Hoc.Gold
+    val textPrimary = Hoc.TextPrimary
+    val textSecondary = Hoc.TextSecondary
+    val danger = Hoc.Danger
+
+    Box(Modifier.fillMaxWidth().height(cardH + 44.dp), contentAlignment = Alignment.Center) {
+        cards.forEachIndexed { i, card ->
+            val offset = i - mid
+            val x = offset * 32f
+            val lift = abs(offset) * 7f + if (card == selected) 12f else 0f
+            val rotation = offset * 6f
+            val isSel = card == selected
+            val border = if (isSel) gold else divider
+            Box(
+                Modifier
+                    .offset(x = x.dp, y = lift.dp)
+                    .graphicsLayer { rotationZ = rotation }
+                    .width(cardW)
+                    .height(cardH)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(surfaceHigh)
+                    .border(if (isSel) 2.dp else 1.5.dp, border, RoundedCornerShape(8.dp))
+                    .clickable { onSelect(card) },
+                contentAlignment = Alignment.Center,
+            ) {
+                when (card) {
+                    is Card.Standard -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(card.rank.label, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                        Text(card.suit.symbol, fontSize = 14.sp, color = if (card.suit.red) danger else textSecondary)
+                    }
+                    is Card.Joker -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (card.type == JokerType.BLACK) "\u2605" else "\u2716", fontSize = 16.sp, color = if (card.type == JokerType.BLACK) gold else danger)
+                        Text(if (card.type == JokerType.BLACK) "Wild" else "Remove", fontSize = 9.sp, color = textSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun highlightCells(engine: SequenceGame, card: Card, opp: Player): Set<Cell> {
+    val out = mutableSetOf<Cell>()
+    for (row in 0 until BOARD_SIZE) for (col in 0 until BOARD_SIZE) {
+        val cell = Cell(row, col)
+        when (card) {
+            is Card.Standard -> {
+                if (!engine.isCorner(cell) && engine.ownerAt(cell) == null &&
+                    engine.boardCardAt(cell) == BoardCard(card.rank, card.suit)
+                ) out.add(cell)
+            }
+            is Card.Joker -> when (card.type) {
+                JokerType.BLACK -> if (!engine.isCorner(cell) && engine.ownerAt(cell) == null) out.add(cell)
+                JokerType.RED -> if (!engine.isCorner(cell) && engine.ownerAt(cell) == opp && !engine.isLocked(cell)) out.add(cell)
+            }
+        }
+    }
+    return out
+}
+
+private fun moveFor(card: Card, cell: Cell): Move = when (card) {
+    is Card.Standard -> Move.Place(card, cell)
+    is Card.Joker -> when (card.type) {
+        JokerType.BLACK -> Move.Place(card, cell)
+        JokerType.RED -> Move.Remove(card, cell)
+    }
+}

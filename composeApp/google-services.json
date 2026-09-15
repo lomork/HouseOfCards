@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "1927537812",
+    "project_id": "house-of-cards-2e689",
+    "storage_bucket": "house-of-cards-2e689.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1927537812:android:3ae12a091013279d790081",
+        "android_client_info": {
+          "package_name": "com.lomork.house_of_cards"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1927537812-mgl3qoo6cgejkgjoni1i7esp5g5fq7uo.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAw6AcNWybFoi-wTHbUTbxBIC4xTUHOcLg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1927537812-mgl3qoo6cgejkgjoni1i7esp5g5fq7uo.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1927537812-3bpdjlnkbghugc05t7p4blgi94jb85s9.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.lomork.houseofcards"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -36,12 +36,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawLine
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.px
 import androidx.compose.ui.unit.sp
 import com.lomork.house_of_cards.theme.Hoc
 import kotlinx.coroutines.delay
@@ -266,8 +264,7 @@ fun JackLinesBanner(gameTitle: String) {
                                 startX = 0f,
                                 endX = w,
                             ),
-                            style = androidx.compose.ui.graphics.Fill,
-                        )
+                                                    )
                     }
                 }
             }
@@ -368,15 +365,16 @@ fun JackLinesBanner(gameTitle: String) {
                         repeat(6) { i ->
                             val angle = (i * 60 + System.currentTimeMillis() / 50 % 360) * PI / 180
                             val r = 15f + Random.nextFloat() * 10f
-                            drawLine(
-                                color = dangerGlow.copy(alpha = sparkAlpha * 0.8f),
-                                start = Offset(chipX, chipY),
-                                end = Offset(
+                            val path = Path().apply {
+                                moveTo(chipX, chipY)
+                                lineTo(
                                     chipX + (cos(angle) * r).toFloat(),
                                     chipY + (sin(angle) * r).toFloat()
-                                ),
-                                strokeWidth = 2f,
-                                cap = StrokeCap.Round,
+                                )
+                            }
+                            drawPath(
+                                path,
+                                color = dangerGlow.copy(alpha = sparkAlpha * 0.8f),
                             )
                         }
                     }
